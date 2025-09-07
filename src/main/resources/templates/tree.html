@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tree Manager</title>
+  <style>
+    :root { --teal: #4fb3bf; --teal-2: #5fc5d1; --blue: #2f66ff; --text: #2a2a2a; }
+    body { font-family: Arial, sans-serif; margin: 24px; color: var(--text); }
+    #tree { margin-top: 16px; }
+    .controls { margin-top: 16px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    .panel { margin-top: 12px; padding: 10px; border: 1px dashed #bbb; border-radius: 6px; }
+    input, button { padding: 6px 8px; }
+    .muted { color: #666; }
+
+    /* Mind-map look */
+    .mind-node rect {  stroke-width: 2px; rx: 10; ry: 10; }
+    .mind-node .title { font: 18px/1.3 "Segoe UI", Arial, sans-serif; user-select: none; }
+    .mind-node .title, .mind-node .subtitle { pointer-events: none; }
+    .mind-node.root rect { stroke: var(--blue); }
+    .mind-node.root .title { font-weight: 700; }
+    .link { stroke: var(--teal-2); stroke-width: 2px; stroke-linecap: round; stroke-linejoin: round; }
+    .selected rect { stroke: #4d88ff !important; stroke-width: 3px; }
+    .node-tools { opacity: 0; transition: opacity .15s; }
+    .mind-node:hover .node-tools { opacity: 1; }
+    .tool circle { fill: #fff; stroke: #a8b0b8; }
+    .tool line { stroke: #6b7680; stroke-width: 2px; }
+
+    /* Legend */
+    #legend { margin-top: 12px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .legend-item { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #333; }
+    .legend-swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid #999; }
+
+    /* App layout */
+    .layout { display: grid; grid-template-columns: 260px 1fr 320px; gap: 16px; align-items: stretch; height: calc(100vh - 96px); }
+    .layout.collapsed-left { grid-template-columns: 48px 1fr 320px; }
+    .layout.collapsed-right { grid-template-columns: 260px 1fr 0px; }
+    .layout.collapsed-left.collapsed-right { grid-template-columns: 48px 1fr 0px; }
+    .sidebar { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04); display: flex; flex-direction: column; }
+    #centerPanel { background: #f8fafc; border-radius: 10px; padding: 16px; }
+    .sidebar .panel-header { position: relative; display: flex; justify-content: center; align-items: center; font-weight: 600; color: #1f2937; margin-bottom: 10px; padding-right: 36px; }
+    #toggleLegendBtn { position: absolute; right: 4px; top: 50%; transform: translateY(-50%); width: 28px; height: 28px; border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; cursor: pointer; }
+    #leftPanel.collapsed #legend, #leftPanel.collapsed .history-header, #leftPanel.collapsed .history { display: none; }
+    #leftPanel.collapsed .panel-header span { display: none; }
+    #rightPanel .form label { display:block; font-size: 13px; color: #555; margin: 8px 0 4px; }
+    #rightPanel .form textarea, #rightPanel .form input { width: 100%; border: 1px solid #e5e7eb; border-radius: 8px; padding: 8px 10px; }
+    #rightPanel .form .btn { display:block; width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid #d1d5db; background: #f3f4f6; cursor: pointer; margin-top: 8px; }
+    #rightPanel .form .btn.primary { background: #2563eb; color: #fff; border-color: #2563eb; }
+    #rightPanel .form .btn.danger { background: #fee2e2; color: #b91c1c; border-color: #fecaca; }
+  </style>
+  <script src="https://d3js.org/d3.v7.min.js"></script>
+  <!-- D3 is optional; we start with vanilla UL/LI rendering -->
+</head>
+<body>
+<h2>Tree Manager</h2>
+
+<div id="layout" class="layout">
+  <aside id="leftPanel" class="sidebar left">
+    <div class="panel-header">
+      <span>Chú thích</span>
+      <button id="toggleLegendBtn" onclick="toggleLegend()">⮜</button>
+    </div>
+    <div id="legend"></div>
+    <div class="history-header" style="margin-top:16px; font-weight:600; color:#1f2937;">Lịch sử thao tác</div>
+    <div id="history" class="history" style="font-size:13px; color:#6b7280; flex: 1; overflow-y: auto;">(sắp có)</div>
+  </aside>
+
+  <main id="centerPanel">
+    <div id="tree">
+      <svg id="treeSvg" width="100%" height="827px">
+        <g id="treeGroup"></g>
+      </svg>
+    </div>
+  </main>
+
+  <aside id="rightPanel" class="sidebar right">
+    <div class="panel-header">Thuộc tính</div>
+    <div id="selectedPanel" class="form" style="display:none; flex: 1; flex-direction: column;">
+      <label>Node đã chọn</label>
+      <div id="selectedInfo" class="muted" style="margin-bottom:8px"></div>
+
+      <label>Thêm node con</label>
+      <button class="btn primary" onclick="createChildForSelected()">+ Thêm node con</button>
+
+      <label style="margin-top:12px">Tên node</label>
+      <textarea id="updateDataSelected" placeholder="New data (hỗ trợ xuống dòng)" rows="4" onblur="autoSaveNode()"></textarea>
+      <label style="margin-top:8px">Dòng phụ (tùy chọn)</label>
+      <textarea id="updateData2Selected" placeholder="Nhập data2 (có thể xuống dòng)" rows="3" onblur="autoSaveNode()"></textarea>
+
+      <button class="btn danger" onclick="deleteSelected()" style="margin-top: auto;">🗑 Xóa node</button>
+    </div>
+    <div id="emptySelection" style="font-size:13px; color:#6b7280; flex: 1; display: flex; align-items: center; justify-content: center;">Chọn một node để chỉnh sửa...</div>
+  </aside>
+</div>
+
+<script>
+  let selectedNodeId = null;
+  let selectedNodeLabel = '';
+  let currentData = [];
+  let i = 0;
+  let rootHierarchy = null;
+  let nodeHeights = new Map();
+  const NODE_W = 160;
+  const NODE_H = 40;
+  const ROOT_W = 280;
+  const ROOT_H = 48;
+  const LINE_H = 18;
+  const PAD_X = 12;
+  const PAD_Y = 10;
+  const BOX_GAP = 6;
+
+  // Depth color palette (depth starts at 1 for roots)
+  function colorForDepth(depth) {
+    // Distinct hues by depth; depth 1 is blue for root
+    if (depth === 1) return '#2f66ff';
+    const hue = (depth * 48 + 20) % 360; // spread hues
+    return `hsl(${hue}, 55%, 45%)`;
+  }
+  function bgForDepth(depth) {
+    // Solid background by level
+    const hue = depth === 1 ? 220 : (depth * 48 + 20) % 360;
+    return `hsl(${hue}, 65%, 52%)`;
+  }
+
+  function hashCode(str) {
+    let h = 0;
+    for (let i = 0; i < str.length; i++) {
+      h = (h << 5) - h + str.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h);
+  }
+
+  function strokeForNode(d) {
+    // Different border per node text: hash the primary text (first line of data)
+    const baseColor = colorForDepth(d.depth);
+    const text = String(d.data.data || '');
+    if (!text) return baseColor;
+    const h = hashCode(text);
+    const delta = (h % 14) - 7; // -7..6
+    // adjust lightness slightly to get distinct borders while staying in same hue family
+    const hue = (d.depth === 1 ? 220 : (d.depth * 48 + 20) % 360);
+    const light = 45 + delta; // 38..59
+    return `hsl(${hue}, 55%, ${light}%)`;
+  }
+
+  function stroke2ForNode(d) {
+    // Secondary border based on data2 content (fallback to base color if missing)
+    const text = String(d.data.data2 || '');
+    if (!text.trim()) return colorForDepth(d.depth);
+    const h = hashCode(text);
+    const delta = (h % 14) - 7;
+    const hue = (d.depth === 1 ? 220 : (d.depth * 48 + 20) % 360);
+    const light = 55 + delta; // slightly lighter than primary
+    return `hsl(${hue}, 55%, ${light}%)`;
+  }
+
+  function wrapIntoTspans(textSel, raw, maxWidth, firstDy) {
+    const paragraphs = String(raw).split(/\r?\n/);
+    let totalLines = 0;
+    for (let p = 0; p < paragraphs.length; p++) {
+      const para = paragraphs[p];
+      // handle blank line explicitly
+      if (!para || !para.trim()) {
+        textSel.append('tspan').attr('x', 0).attr('dy', p === 0 ? firstDy : LINE_H).text('');
+        totalLines++;
+        continue;
+      }
+      const words = para.split(/\s+/);
+      let line = [];
+      let tspan = textSel.append('tspan').attr('x', 0).attr('dy', p === 0 ? firstDy : LINE_H);
+      for (let i = 0; i < words.length; i++) {
+        const testLine = [...line, words[i]].join(' ');
+        tspan.text(testLine);
+        if (tspan.node().getComputedTextLength() > maxWidth && line.length) {
+          totalLines++;
+          line = [words[i]];
+          tspan = textSel.append('tspan').attr('x', 0).attr('dy', LINE_H).text(line.join(' '));
+        } else {
+          line = [...line, words[i]];
+        }
+      }
+      if (line.length) totalLines++;
+    }
+    return totalLines;
+  }
+
+  async function loadTree() {
+    const res = await fetch('/api/tree');
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) {
+      await fetch('/api/tree/root', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: 'Chủ đề trung tâm' }) });
+      return loadTree();
+    }
+    currentData = data;
+    renderTreeD3(data);
+  }
+
+  function renderTreeD3(roots) {
+    const svg = d3.select('#treeSvg');
+    const width = svg.node().clientWidth;
+    const height = +svg.attr('height');
+    const g = d3.select('#treeGroup');
+
+    // zoom/pan
+    svg.call(d3.zoom().scaleExtent([0.2, 2]).on('zoom', (event) => {
+      g.attr('transform', event.transform);
+    }));
+
+    // Convert multiple roots to a faux root
+    const faux = { id: 0, data: 'ROOT', children: roots };
+    rootHierarchy = d3.hierarchy(faux, d => d.children);
+    // Top-down orientation: x = horizontal within level, y = depth (vertical)
+    const treeLayout = d3.tree().nodeSize([220, 120]).separation((a,b) => a.parent === b.parent ? 1.1 : 1.4);
+    treeLayout(rootHierarchy);
+
+    // Data join: links
+    const links = rootHierarchy.links().filter(l => l.target.data && l.target.data.id !== 0 && l.source.depth > 0);
+    const linkSel = g.selectAll('path.link').data(links, d => d.target.data.id);
+    linkSel.enter()
+            .append('path')
+            .attr('class', 'link')
+            .attr('fill', 'none')
+            .attr('stroke-width', 2)
+            .merge(linkSel)
+            .attr('d', d => elbowPath(d))
+            .attr('stroke', d => colorForDepth(d.target.depth));
+    linkSel.exit().remove();
+
+    // Filter out the faux root for nodes
+    const nodeData = rootHierarchy.descendants().filter(n => n.depth > 0);
+    const nodeSel = g.selectAll('g.node').data(nodeData, d => d.data.id);
+
+    const nodeEnter = nodeSel.enter().append('g')
+            .attr('class', d => `node mind-node ${d.depth === 1 ? 'root' : ''}`)
+            .attr('transform', d => `translate(${d.x},${d.y})`)
+            .on('click', (event, d) => onNodeClick(d));
+
+    // group for two stacked boxes: data (top) and optional data2 (bottom)
+    const card = nodeEnter.append('g').attr('class', 'card');
+    // top box for data - positioned so it expands downward only
+    card.append('rect')
+            .attr('class', 'box1')
+            .attr('x', d => -(d.depth === 1 ? ROOT_W : NODE_W) / 2)
+            .attr('y', d => -(d.depth === 1 ? ROOT_H : NODE_H) / 2)
+            .attr('width', d => d.depth === 1 ? ROOT_W : NODE_W)
+            .attr('height', d => d.depth === 1 ? ROOT_H : NODE_H)
+            .attr('stroke', d => strokeForNode(d))
+            .attr('fill', d => bgForDepth(d.depth));
+    // bottom box for data2 (hidden if none)
+    card.append('rect')
+            .attr('class', 'box2')
+            .attr('x', d => -(d.depth === 1 ? ROOT_W : NODE_W) / 2)
+            .attr('y', d => (d.depth === 1 ? ROOT_H : NODE_H) / 2 + BOX_GAP)
+            .attr('width', d => d.depth === 1 ? ROOT_W : NODE_W)
+            .attr('height', 0)
+            .attr('stroke', d => strokeForNode(d))
+            .attr('fill', d => bgForDepth(d.depth))
+            .style('display', d => (d.data.data2 && String(d.data.data2).trim()) ? null : 'none');
+
+    const labelEnter = nodeEnter.append('text')
+            .attr('class', 'title')
+            .attr('text-anchor', 'middle')
+            .attr('dy', '0.35em');
+    labelEnter.each(function(d){
+      const text = d3.select(this);
+      // render multi-line into two paragraphs: data in box1, data2 in box2
+      const maxW = (d.depth === 1 ? ROOT_W : NODE_W) - PAD_X * 2;
+      let cursorDy = 0;
+      const dataLines = String(d.data.data || '');
+      const lines1 = wrapIntoTspans(text, dataLines, maxW, cursorDy === 0 ? 0 : LINE_H);
+      cursorDy += lines1 * LINE_H;
+    });
+    // label color: dark for all nodes
+    nodeEnter.select('text.title').attr('fill', '#1f2d3d');
+
+    // separate text for data2 (subtitle) rendered inside box2
+    const subEnter = nodeEnter.append('text')
+            .attr('class', 'subtitle')
+            .attr('text-anchor', 'middle')
+            .attr('dy', '0.35em')
+            .style('display', d => (d.data.data2 && String(d.data.data2).trim()) ? null : 'none');
+    subEnter.each(function(d){
+      const text = d3.select(this);
+      const maxW = (d.depth === 1 ? ROOT_W : NODE_W) - PAD_X * 2;
+      text.selectAll('tspan').remove();
+      if (d.data.data2 && d.data.data2.trim()) {
+        wrapIntoTspans(text, String(d.data.data2), maxW, 0);
+      }
+    });
+    nodeEnter.select('text.subtitle').attr('fill', '#1f2d3d');
+
+    // Hover "+" add child button (top-right of each node)
+    const tools = nodeEnter.append('g')
+            .attr('class', 'node-tools')
+            .attr('transform', d => `translate(${(d.depth === 1 ? ROOT_W : NODE_W)/2 - 16},${-(d.depth === 1 ? ROOT_H : NODE_H)/2 + 16})`);
+    const addBtn = tools.append('g').attr('class', 'tool add').on('click', (event, d) => { event.stopPropagation(); onAddChildQuick(d, true); });
+    addBtn.append('circle').attr('r', 10);
+    addBtn.append('line').attr('x1', -5).attr('y1', 0).attr('x2', 5).attr('y2', 0);
+    addBtn.append('line').attr('x1', 0).attr('y1', -5).attr('x2', 0).attr('y2', 5);
+    const delBtn = tools.append('g').attr('class', 'tool del').attr('transform', 'translate(24,0)')
+            .on('click', (event, d) => { event.stopPropagation(); onDeleteQuick(d); });
+    delBtn.append('circle').attr('r', 10);
+    delBtn.append('line').attr('x1', -4).attr('y1', -4).attr('x2', 4).attr('y2', 4);
+    delBtn.append('line').attr('x1', -4).attr('y1', 4).attr('x2', 4).attr('y2', -4);
+    // hide delete tool for root nodes
+    nodeEnter.filter(d => d.depth === 1).selectAll('.tool.del').style('display', 'none');
+
+    const nodeUpdate = nodeEnter.merge(nodeSel);
+    nodeUpdate
+            .attr('transform', d => `translate(${d.x},${d.y})`)
+            .classed('selected', d => d.data.id === selectedNodeId);
+
+    // Resize and style boxes to fit wrapped text - FIXED: expand only downward
+    nodeUpdate.each(function(d){
+      const gnode = d3.select(this);
+      const text = gnode.select('text.title');
+      const tspans = text.selectAll('tspan').nodes();
+      const baseW = d.depth === 1 ? ROOT_W : NODE_W;
+      const baseH = d.depth === 1 ? ROOT_H : NODE_H;
+      // Count lines for data (before spacer) and data2
+      const lines1 = tspans.length;
+      const lines2 = gnode.select('text.subtitle').selectAll('tspan').nodes().length;
+
+      // FIXED: Box1 now expands only downward from its original top position
+      const height1 = Math.max(baseH, lines1 * LINE_H + PAD_Y * 2);
+      gnode.select('rect.box1')
+              .attr('x', -baseW / 2)
+              .attr('y', -baseH / 2)  // Keep original top position
+              .attr('width', baseW)
+              .attr('height', height1)
+              .attr('stroke', strokeForNode(d))
+              .attr('fill', bgForDepth(d.depth));
+
+      const has2 = d.data.data2 && String(d.data.data2).trim();
+      const height2 = has2 ? Math.max(baseH * 0.6, (lines2) * LINE_H + PAD_Y * 2) : 0;
+      gnode.select('rect.box2')
+              .style('display', has2 ? null : 'none')
+              .attr('x', -baseW / 2)
+              .attr('y', -baseH / 2 + height1 + BOX_GAP) // Start from bottom of box1
+              .attr('width', baseW)
+              .attr('height', height2)
+              .attr('stroke', strokeForNode(d))
+              .attr('fill', bgForDepth(d.depth));
+
+      // position subtitle text inside box2
+      gnode.select('text.subtitle')
+              .style('display', has2 ? null : 'none')
+              .attr('fill', '#1f2d3d')
+              .attr('y', has2 ? (-baseH / 2 + height1 + BOX_GAP + PAD_Y + LINE_H / 2) : 0);
+
+      // store total height to extend link start/end positions later
+      nodeHeights.set(d.data.id, { h1: height1, h2: height2, baseH: baseH });
+    });
+
+    // rebuild tspans to reflect data/data2 changes on updates
+    nodeUpdate.select('text.title').each(function(d){
+      const text = d3.select(this);
+      text.selectAll('tspan').remove();
+      const maxW = (d.depth === 1 ? ROOT_W : NODE_W) - PAD_X * 2;
+      wrapIntoTspans(text, String(d.data.data || ''), maxW, 0);
+    }).attr('fill', '#1f2d3d');
+
+    nodeUpdate.select('text.subtitle').each(function(d){
+      const text = d3.select(this);
+      text.selectAll('tspan').remove();
+      const maxW = (d.depth === 1 ? ROOT_W : NODE_W) - PAD_X * 2;
+      if (d.data.data2 && d.data.data2.trim()) {
+        wrapIntoTspans(text, String(d.data.data2), maxW, 0);
+      }
+    }).attr('fill', '#1f2d3d');
+
+    // Recompute sizes AFTER text tspans are rebuilt, then update boxes and links
+    nodeUpdate.each(function(d){
+      const gnode = d3.select(this);
+      const titleTspans = gnode.select('text.title').selectAll('tspan').nodes();
+      const subtitleTspans = gnode.select('text.subtitle').selectAll('tspan').nodes();
+      const baseW = d.depth === 1 ? ROOT_W : NODE_W;
+      const baseH = d.depth === 1 ? ROOT_H : NODE_H;
+
+      const lines1 = titleTspans.length;
+      const lines2 = subtitleTspans.length;
+
+      // FIXED: Box1 expands only downward
+      const height1 = Math.max(baseH, lines1 * LINE_H + PAD_Y * 2);
+      gnode.select('rect.box1')
+              .attr('x', -baseW / 2)
+              .attr('y', -baseH / 2)  // Keep original top position
+              .attr('width', baseW)
+              .attr('height', height1)
+              .attr('stroke', strokeForNode(d))
+              .attr('fill', bgForDepth(d.depth));
+
+      const has2 = d.data.data2 && String(d.data.data2).trim();
+      const height2 = has2 ? Math.max(baseH * 0.6, (lines2) * LINE_H + PAD_Y * 2) : 0;
+      gnode.select('rect.box2')
+              .style('display', has2 ? null : 'none')
+              .attr('x', -baseW / 2)
+              .attr('y', -baseH / 2 + height1 + BOX_GAP) // Start from bottom of box1
+              .attr('width', baseW)
+              .attr('height', height2)
+              .attr('stroke', strokeForNode(d))
+              .attr('fill', bgForDepth(d.depth));
+
+      gnode.select('text.subtitle')
+              .style('display', has2 ? null : 'none')
+              .attr('y', has2 ? (-baseH / 2 + height1 + BOX_GAP + PAD_Y + LINE_H / 2) : 0);
+
+      nodeHeights.set(d.data.id, { h1: height1, h2: height2, baseH: baseH });
+    });
+
+    // After heights are computed, update link paths so they connect to the bottom of the last box
+    g.selectAll('path.link').attr('d', d => elbowPath(d));
+
+    nodeSel.exit().remove();
+
+    // Update legend based on present depths
+    const depths = Array.from(new Set(nodeData.map(n => n.depth))).sort((a,b)=>a-b);
+    renderLegend(depths);
+  }
+
+  // FIXED: Elbow path now connects from bottom of last box (data2 if exists, else data)
+  function elbowPath(d) {
+    const x0 = d.source.x;
+    const x1 = d.target.x;
+
+    // Get actual heights from nodeHeights map
+    const sourceHeights = nodeHeights.get(d.source.data.id) || { h1: d.source.depth === 1 ? ROOT_H : NODE_H, h2: 0, baseH: d.source.depth === 1 ? ROOT_H : NODE_H };
+    const targetHeights = nodeHeights.get(d.target.data.id) || { h1: d.target.depth === 1 ? ROOT_H : NODE_H, h2: 0, baseH: d.target.depth === 1 ? ROOT_H : NODE_H };
+
+    // Source: start from bottom of last box (data2 if exists, else data)
+    const sourceHasData2 = d.source.data.data2 && String(d.source.data.data2).trim();
+    const y0 = sourceHasData2
+            ? d.source.y - sourceHeights.baseH / 2 + sourceHeights.h1 + BOX_GAP + sourceHeights.h2
+            : d.source.y - sourceHeights.baseH / 2 + sourceHeights.h1;
+
+    // Target: end at top of first box (always data box)
+    const y1 = d.target.y - targetHeights.baseH / 2;
+
+    const mx = x0; // vertical from source
+    const my = (y0 + y1) / 2; // mid y for smoothness
+
+    // Path: down from (x0,y0) to (x0,my), horizontal to (x1,my), down to (x1,y1)
+    return `M${x0},${y0}
+          L${x0},${my}
+          L${x1},${my}
+          L${x1},${y1}`.replace(/\s+/g,' ');
+  }
+
+  function renderLegend(depths) {
+    const legend = document.getElementById('legend');
+    legend.innerHTML = '';
+    depths.forEach(depth => {
+      const item = document.createElement('div');
+      item.className = 'legend-item';
+      const sw = document.createElement('span');
+      sw.className = 'legend-swatch';
+      sw.style.background = bgForDepth(depth);
+      sw.style.borderColor = colorForDepth(depth);
+      item.appendChild(sw);
+      const label = document.createElement('span');
+      label.textContent = `Đời thứ  ${depth}`;
+      item.appendChild(label);
+      legend.appendChild(item);
+    });
+  }
+
+  async function createRoot() {
+    const data = document.getElementById('rootData').value.trim();
+    if (!data) return alert('Enter root data');
+    await fetch('/api/tree/root', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data }) });
+    document.getElementById('rootData').value = '';
+    await loadTree();
+  }
+
+  function toggleLegend() {
+    const layout = document.getElementById('layout');
+    const left = document.getElementById('leftPanel');
+    const btn = document.getElementById('toggleLegendBtn');
+    const collapsed = left.classList.toggle('collapsed');
+    layout.classList.toggle('collapsed-left', collapsed);
+    btn.textContent = collapsed ? '⮞' : '⮜';
+  }
+
+  function setSelected(node) {
+    selectedNodeId = node.id;
+    selectedNodeLabel = node.data;
+    const right = document.getElementById('rightPanel');
+    const layout = document.getElementById('layout');
+    right.style.display = 'block';
+    layout.classList.remove('collapsed-right');
+    document.getElementById('selectedPanel').style.display = 'block';
+    document.getElementById('emptySelection').style.display = 'none';
+    document.getElementById('selectedInfo').textContent = `(${selectedNodeId}) ${selectedNodeLabel}`;
+    // Prefill update fields with current values
+    const current = findNodeById(currentData, selectedNodeId);
+    if (current) {
+      const dataField = document.getElementById('updateDataSelected');
+      const data2Field = document.getElementById('updateData2Selected');
+      if (dataField) dataField.value = current.data || '';
+      if (data2Field) data2Field.value = current.data2 || '';
+    }
+    renderTreeD3(currentData);
+  }
+
+  function findNodeById(list, id) {
+    if (!Array.isArray(list)) return null;
+    for (const n of list) {
+      if (n.id === id) return n;
+      const found = findNodeById(n.children, id);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function onNodeClick(d) {
+    // toggle collapse
+    if (d.children) {
+      d._children = d.children;
+      d.children = null;
+    } else if (d._children) {
+      d.children = d._children;
+      d._children = null;
+    }
+    setSelected({ id: d.data.id, data: d.data.data });
+  }
+
+  async function onAddChildQuick(d) {
+    const label = 'Chủ đề phụ';
+    await fetch('/api/tree/child', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentId: String(d.data.id), data: label }) });
+    await loadTree();
+  }
+
+  async function onDeleteQuick(d) {
+    if (d.depth === 1) { alert('Không thể xóa node gốc'); return; }
+    if (!confirm('Xóa node này và toàn bộ cây con?')) return;
+    await fetch(`/api/tree/${d.data.id}`, { method: 'DELETE' });
+    await loadTree();
+  }
+
+  async function createChildForSelected() {
+    if (!selectedNodeId) return alert('Hãy chọn node');
+    const data = 'Chủ đề phụ';
+    await fetch('/api/tree/child', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ parentId: String(selectedNodeId), data }) });
+    await loadTree();
+  }
+
+  async function updateSelected() {
+    if (!selectedNodeId) return alert('Hãy chọn node');
+    const data = document.getElementById('updateDataSelected').value;
+    if (!data || !data.trim()) return alert('Nhập new data');
+    const data2 = document.getElementById('updateData2Selected').value;
+    await fetch(`/api/tree/${selectedNodeId}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data, data2 }) });
+    await loadTree();
+  }
+
+  async function autoSaveNode() {
+    if (!selectedNodeId) return;
+    const data = document.getElementById('updateDataSelected').value;
+    const data2 = document.getElementById('updateData2Selected').value;
+    
+    // Chỉ lưu nếu có thay đổi
+    const current = findNodeById(currentData, selectedNodeId);
+    if (current && (current.data !== data || current.data2 !== data2)) {
+      try {
+        await fetch(`/api/tree/${selectedNodeId}`, { 
+          method: 'PUT', 
+          headers: { 'Content-Type': 'application/json' }, 
+          body: JSON.stringify({ data, data2 }) 
+        });
+        await loadTree();
+      } catch (error) {
+        console.error('Lỗi khi tự động lưu:', error);
+      }
+    }
+  }
+
+  async function deleteSelected() {
+    if (!selectedNodeId) return alert('Hãy chọn node');
+    const depthMap = new Map(rootHierarchy.descendants().map(n => [n.data && n.data.id, n.depth]));
+    if (depthMap.get(selectedNodeId) === 1) { alert('Không thể xóa node gốc'); return; }
+    if (!confirm('Xóa node này và toàn bộ cây con?')) return;
+    await fetch(`/api/tree/${selectedNodeId}`, { method: 'DELETE' });
+    selectedNodeId = null;
+    document.getElementById('selectedPanel').style.display = 'none';
+    document.getElementById('emptySelection').style.display = 'none';
+    document.getElementById('rightPanel').style.display = 'none';
+    document.getElementById('layout').classList.add('collapsed-right');
+    await loadTree();
+  }
+
+  // Hide right panel by default until a node is selected
+  document.getElementById('rightPanel').style.display = 'none';
+  document.getElementById('layout').classList.add('collapsed-right');
+
+  function clearSelection() {
+    selectedNodeId = null;
+    const right = document.getElementById('rightPanel');
+    const layout = document.getElementById('layout');
+    document.getElementById('selectedPanel').style.display = 'none';
+    document.getElementById('emptySelection').style.display = 'none';
+    right.style.display = 'none';
+    layout.classList.add('collapsed-right');
+    // also un-highlight any previously selected node
+    d3.selectAll('g.node').classed('selected', false);
+  }
+
+  // Global click: if clicking outside any node and outside right panel, clear selection
+  document.addEventListener('click', (e) => {
+    const inNode = e.target.closest && e.target.closest('.mind-node');
+    const inRight = e.target.closest && e.target.closest('#rightPanel');
+    if (!inNode && !inRight) {
+      clearSelection();
+    }
+  });
+
+  loadTree();
+</script>
+
+</body>
+</html>
